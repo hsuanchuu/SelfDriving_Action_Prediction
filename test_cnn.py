@@ -19,34 +19,40 @@ from utils import attention
 import matplotlib.pyplot as plt
 
 class baseline(nn.Module):
-    def __init__(self):
+    def __init__(self, side):
         super(baseline, self).__init__()
+        self.side = side
+
         res101 = models.resnet101(pretrained=True)
         num_ftrs = res101.fc.in_features
         modules = list(res101.children())[:-1]
         self.backbone = nn.Sequential(*modules)
         self.fc1 = nn.Linear(num_ftrs, 5)
         self.drop1 = nn.Dropout(0.25)
-        self.fc2 = nn.Linear(num_ftrs, 21)
-        #self.drop2 = nn.Dropout(0.25)
+        if self.side:
+            self.fc2 = nn.Linear(num_ftrs, 21)
+            self.drop2 = nn.Dropout(0.25)
+
     def forward(self, x):
         x = self.backbone(x)
         x = x.view(x.size()[0], -1)
         r1 = self.drop1(self.fc1(x))
-        r2 = self.fc2(x)
-        return r1, r2
-
+        if self.side:
+            r2 = self.drop2(self.fc2(x))
+            return r1, r2
+        else:
+            return r1
 
 def test(args):
     # Initialize the network
-    model = baseline()
+    model = baseline(args.side)
     
     if torch.cuda.device_count() > 1:
         print("Let's use", torch.cuda.device_count(), "GPUs!")
         model = nn.DataParallel(model)
     model.load_state_dict(torch.load(args.model_root))
-    
     print(model)
+
     model.eval()
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -55,23 +61,13 @@ def test(args):
     if args.is_savemaps:
         hook_conv5 = SimpleHook(model.layer4)
     
-    # Initialize image batch
-    #imBatch = Variable(torch.FloatTensor(args.batch_size, 3, 224, 224))
-    #targetBatch = Variable(torch.FloatTensor(args.batch_size, 5))
-    
-    # Move network and batch to GPU
-    #imBatch = imBatch.to(device)
-    #targetBatch = targetBatch.to(device)
-    
     # Initialize DataLoader
     Dataset = BatchLoader(
         imageRoot = args.imageroot,
         gtRoot = args.gtroot,
         reasonRoot = args.reasonroot,
-        # cropSize = (args.imHeight, args.imWidth)
-
     )
-    dataloader = DataLoader(Dataset, batch_size=int(args.batch_size), num_workers=8, shuffle=False)
+    dataloader = DataLoader(Dataset, batch_size=int(args.batch_size), num_workers=0, shuffle=False)
     
     
     AccuracyArr = []
@@ -92,10 +88,14 @@ def test(args):
 
         target_cpu = dataBatch['target']
         targetBatch = target_cpu.to(device)
-        reason_cpu = dataBatch['reason']
-        reasonBatch = reason_cpu.to(device)
+        if args.side:
+            reason_cpu = dataBatch['reason']
+            reasonBatch = reason_cpu.to(device)
  
-        pred, pred_reason = model(imBatch)
+            # Prediction
+            pred, pred_reason = model(imBatch)
+        else:
+            pred = model(imBatch)
         
         if args.is_savemaps:
             hooked_features = hook_conv5.output.data
@@ -106,10 +106,11 @@ def test(args):
         
         # Calculate accuracy
         predict = torch.sigmoid(pred) > 0.5
-        predict_reason = torch.sigmoid(pred_reason) > 0.5
-
         f1 = f1_score(target_cpu.data.numpy(), predict.cpu().data.numpy(), average=None)
         f1_overall = f1_score(target_cpu.data.numpy(), predict.cpu().data.numpy(), average='samples')
+
+        
+        predict_reason = torch.sigmoid(pred_reason) > 0.5
         f1_reason = f1_score(reason_cpu.data.numpy(), predict_reason.cpu().data.numpy(), average='samples')
 
         # print("f1 score:{}".format(f1))
@@ -200,8 +201,14 @@ def main():
     )
     parser.add_argument(
         "--is_savemaps",
-        type=bool,
+        action='store_true',
         help="Whether save attention maps",
+        default=False
+    )
+    parser.add_argument(
+        "--side",
+        action='store_true',
+        help="predicting explanations as side task",
         default=False
     )
     parser.add_argument(
@@ -212,6 +219,15 @@ def main():
     )
     args = parser.parse_args()
     print(args)
+
+    if torch.cuda.is_available():
+        print("CUDA device is available.")
+
+    # output directory
+    outdir = args.out_dir
+    print("Save path:", outdir)
+    if outdir:
+        mkdir(outdir)
     
     test(args)
     
