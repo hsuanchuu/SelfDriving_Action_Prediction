@@ -2,8 +2,8 @@
 Multiple ego-actions and explanations predictions on new annotated self-driving dataset
 
 ## Baseline
-- Architecture: ResNet101 with linear classifier  
-- Usage:  
+Architecture: ResNet101 with linear classifier  
+Usage:  
 **1. Predicting multiple ego-actions:**  
 Training:  
 ```python baseline/train_cnn.py --imageroot path/to/image/ --gtroot path/to/groundtruth/actions/ --out_dir output/directory/```  
@@ -18,12 +18,12 @@ Testing:
 
 
 ## Object-centric model  
-- Architecture: FasterRCNN with selector and predictor  
+Architecture: FasterRCNN with selector and predictor  
 ```cd maskrcnn-benchmark/```  
 **1. Preparation:**  
-Follow [INSTALL.md](INSTALL.md) for installation instructions.  
+Follow [maskrcnn-benchmark/INSTALL.md](maskrcnn-benchmark/INSTALL.md) for installation instructions.  
 **2. Pretrained faster-rcnn**  
-Follow [README.md](README.md) for training and testing faster-rcnn.  
+Follow [maskrcnn-benchmark/README.md](maskrcnn-benchmark/README.md) for training and testing faster-rcnn.  
 Using "e2e_faster_rcnn_R_50_C4_1x.yaml" as config file.  
 **3. Predicting multiple ego-actions and explanations**  
 Training:  
