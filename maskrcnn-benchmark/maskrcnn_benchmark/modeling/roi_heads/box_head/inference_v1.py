@@ -4,8 +4,8 @@ import torch.nn.functional as F
 from torch import nn
 
 from maskrcnn_benchmark.structures.bounding_box import BoxList
-from maskrcnn_benchmark.structures.boxlist_ops import boxlist_nms
-from maskrcnn_benchmark.structures.boxlist_ops import cat_boxlist
+from maskrcnn_benchmark.structures.boxlist_ops_v1 import boxlist_nms
+from maskrcnn_benchmark.structures.boxlist_ops_v1 import cat_boxlist
 from maskrcnn_benchmark.modeling.box_coder import BoxCoder
 
 
@@ -78,15 +78,17 @@ class PostProcessor(nn.Module):
         class_prob = class_prob.split(boxes_per_image, dim=0)
 
         results = []
+        idxs = []
         for prob, boxes_per_img, image_shape in zip(
             class_prob, proposals, image_shapes
         ):
             boxlist = self.prepare_boxlist(boxes_per_img, prob, image_shape)
             boxlist = boxlist.clip_to_image(remove_empty=False)
             if not self.bbox_aug_enabled:  # If bbox aug is enabled, we will do it later
-                boxlist = self.filter_results(boxlist, num_classes)
+                boxlist, idx = self.filter_results(boxlist, num_classes)
             results.append(boxlist)
-        return results
+            idxs.append(idx)
+        return results, idxs
 
     def prepare_boxlist(self, boxes, scores, image_shape):
         """
@@ -107,7 +109,7 @@ class PostProcessor(nn.Module):
         boxlist.add_field("scores", scores)
         return boxlist
 
-    def filter_results(self, boxlist, num_classes):
+    def filter_results(self, boxlist, num_classes, new_thresh=None):
         """Returns bounding-box detection results by thresholding on scores and
         applying non-maximum suppression (NMS).
         """
@@ -120,28 +122,42 @@ class PostProcessor(nn.Module):
         result = []
         # Apply threshold on detection probabilities and apply NMS
         # Skip j = 0, because it's the background class
-        inds_all = scores > self.score_thresh
-        # idx = []
+        if not new_thresh:
+            new_thresh = self.score_thresh
+        inds_all = scores > new_thresh
+        tmp_thresh = new_thresh
+        # while inds_all.nonzero().shape[0] < 10: # less than 10 objects
+        #     print("less than 10 objects")
+        #     tmp_thresh /= 2
+        #     inds_all = scores > tmp_thresh
+        idx = [] # to record the index of selected candidates
         for j in range(1, num_classes):
             inds = inds_all[:, j].nonzero().squeeze(1)
-            # if len(inds) > 0:
-            #     idx.append(inds)
+            # print(scores[0])
             scores_j = scores[inds, j]
             boxes_j = boxes[inds, j * 4 : (j + 1) * 4]
             boxlist_for_class = BoxList(boxes_j, boxlist.size, mode="xyxy")
             boxlist_for_class.add_field("scores", scores_j)
-            boxlist_for_class = boxlist_nms(
+            boxlist_for_class, keep = boxlist_nms(
                 boxlist_for_class, self.nms
             )
             num_labels = len(boxlist_for_class)
+            if len(inds) > 0:
+                idx.append(inds[keep])
             boxlist_for_class.add_field(
                 "labels", torch.full((num_labels,), j, dtype=torch.int64, device=device)
             )
             result.append(boxlist_for_class)
 
-        # idx = torch.cat(idx)
+        if len(idx) > 0:
+            idx = torch.cat(idx)
+        # print(idx.shape[0])
         result = cat_boxlist(result)
         number_of_detections = len(result)
+        #print(number_of_detections)
+        while number_of_detections < 10: # if detected objects less than 10
+            result, idx = self.filter_results(boxlist, num_classes, new_thresh=new_thresh/2)
+            number_of_detections = len(result)
 
         # Limit to max_per_image detections **over all classes**
         if number_of_detections > self.detections_per_img > 0:
@@ -152,9 +168,9 @@ class PostProcessor(nn.Module):
             keep = cls_scores >= image_thresh.item()
             keep = torch.nonzero(keep).squeeze(1)
             result = result[keep]
-            # idx = idx[keep]
+            idx = idx[keep]
 
-        return result
+        return result, idx
 
 
 def make_roi_box_post_processor(cfg):

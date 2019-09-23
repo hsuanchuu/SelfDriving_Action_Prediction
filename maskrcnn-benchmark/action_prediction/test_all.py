@@ -17,29 +17,34 @@ from maskrcnn_benchmark.modeling.detector import build_detection_model
 from DataLoader_together import BatchLoader
 
 from utils import attention
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+
 def test(cfg, args):
-    # torch.cuda.set_device(0 )
+    # torch.cuda.set_device(5)
 
     # Initialize the network
     model = build_detection_model(cfg)
+    print(model)
     model.eval()
     #print(model)
     
     # model load weights
-    # path_to_weight = "/data6/SRIP19_SelfDriving/bdd12k/Outputs/netFinal_1.pth"
     model.load_state_dict(torch.load(args.model_root))
     # model.load_state_dict(torch.load(cfg.MODEL.WEIGHT))
 
     device = torch.device(cfg.MODEL.DEVICE)
     model.to(device)
     outdir = os.path.join(cfg.OUTPUT_DIR,'inference/')
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
 
-    if args.is_savemaps:
-        print(model.predictor)
-        hook_conv5 = SimpleHook(model.predictor.head.layer4)
+    # if args.is_savemaps:
+    #     print(model.predictor)
+    #     hook_conv5 = SimpleHook(model.predictor.relu_glob1)
 
     # Initialize DataLoader
     Dataset = BatchLoader(
@@ -48,7 +53,7 @@ def test(cfg, args):
         reasonRoot = args.reasonroot,
         cropSize = (args.imHeight, args.imWidth)
     )
-    dataloader = DataLoader(Dataset, batch_size=int(args.batch_size), num_workers=0, shuffle=False)
+    dataloader = DataLoader(Dataset, batch_size=int(args.batch_size), num_workers=24, shuffle=False)
 
     AccOverallArr = []
     TargetArr = []
@@ -69,37 +74,47 @@ def test(cfg, args):
 
 
     count = dataloader.__len__()
-    for i, dataBatch in enumerate(dataloader):
-        print('Finished: %.2f%%' % (i*int(args.batch_size)/count * 100))
+    for i, dataBatch in enumerate(dataloader): 
+        print('Finished: {} / {}'.format(i, count))
+        print('Finished: %.2f%%' % (i /count * 100))
         # Read data
-        img_cpu = dataBatch['img']
-        imBatch = img_cpu.to(device)
-        ori_img_cpu = dataBatch['ori_img']
+        with torch.no_grad():
+            img_cpu = dataBatch['img']
+            imBatch = img_cpu.to(device)
+            ori_img_cpu = dataBatch['ori_img']
 
-        target_cpu = dataBatch['target']
-        targetBatch = target_cpu.to(device)
-        if cfg.MODEL.SIDE:
-            reason_cpu = dataBatch['reason']
-            reasonBatch = reason_cpu.to(device)
-            pred, pred_reason = model(imBatch)
-        else:
-            pred = model(imBatch)
+            target_cpu = dataBatch['target']
+            targetBatch = target_cpu.to(device)
+            if cfg.MODEL.SIDE:
+                reason_cpu = dataBatch['reason']
+                reasonBatch = reason_cpu.to(device)
+                if not args.is_savemaps:
+                    pred, pred_reason = model(imBatch)
+                else:
+                    hook_conv5 = SimpleHook(model.predictor.relu_glob1)  
+                    pred, pred_reason, selected_boxes = model(imBatch)
+            else:
+                if not args.is_savemaps:
+                    pred = model(imBatch)
+                else:
+                    hook_conv5 = SimpleHook(model.predictor.relu_glob1)  
+                    pred, selected_boxes = model(imBatch)
 
         # if i == 0: # estimate the model size
         #     modelsize(model, imBatch)
         # pred, selected_boxes = model(imBatch)
-        # DrawBbox(ori_img_cpu[0], selected_boxes[0])
-        # plt.clf()
-        # plt.close()
+        # DrawBbox(ori_img_cpu[0], selected_boxes[0], outdir, i)
+
         # torch.cuda.empty_cache()
         if args.is_savemaps:
+               
             hooked_features = hook_conv5.output.data
+            print("hooked_feature:", hooked_features.shape)
             hooked_features = torch.mean(torch.mean(hooked_features, dim=0 ), dim=0)
-            # hooked_features = torch.sum(torch.sum(hooked_features, dim=0), dim=0)
-            # print(hooked_features.shape)
-            new_img = attention(ori_img_cpu.squeeze(0).data.numpy(), hooked_features.cpu().data.numpy())
-            plt.imsave((outdir + 'att_maps/' + str(i) + '.jpg'), new_img)
-        
+            new_img = attention(ori_img_cpu.squeeze(0).data.numpy(), hooked_features.cpu().data.numpy(), [hooked_features.shape[-1], hooked_features.shape[-1]])
+             # plt.imsave((outdir + 'att_maps/' + str(i) + '_att.jpg'), new_img)
+            DrawBbox(new_img, selected_boxes[0], outdir, i)
+
         # Calculate accuracy
         predict = torch.sigmoid(pred) > 0.5
         # torch.cuda.empty_cache()
@@ -152,6 +167,9 @@ def test(cfg, args):
     PredArr = List2Arr(PredArr)
     RandomArr = List2Arr(RandomArr)
     
+    
+    print(TargetArr)
+    print(PredArr)
     f1_pred = f1_score(TargetArr, PredArr, average=None)
     f1_rand = f1_score(TargetArr, RandomArr, average=None)
 
@@ -190,7 +208,8 @@ def List2Arr(List):
 
     return np.vstack((Arr1, Arr2))
 
-def DrawBbox(img, boxlist):
+def DrawBbox(img, boxlist, outdir, k):
+    fig = plt.figure()
     plt.imshow(img)
     currentAxis = plt.gca()
     for i in range(boxlist.shape[0]):
@@ -198,8 +217,11 @@ def DrawBbox(img, boxlist):
         rect = patches.Rectangle((bbox[0], bbox[1]), bbox[2]-bbox[0], bbox[3]-bbox[1], linewidth=1, edgecolor='r', facecolor='none')
         # rect = patches.Rectangle((bbox[1], bbox[0]), bbox[3]-bbox[1], bbox[2]-bbox[0], linewidth=1, edgecolor='r', facecolor='none')
         currentAxis.add_patch(rect)
-
+    plt.axis('off')
     plt.show()
+    plt.savefig(outdir + 'att_maps/' + str(k) + '.jpg', dpi=200 )
+    plt.clf()
+    plt.close()
 
 
 class SimpleHook(object):
@@ -226,7 +248,7 @@ def main():
     parser = argparse.ArgumentParser(description="Action Prediction Training")
     parser.add_argument(
         "--config-file",
-        default="/home/SelfDriving/maskrcnn/maskrcnn-benchmark/configs/baseline.yaml",
+        default="/home/selfdriving/SelfDriving_0905/maskrcnn/maskrcnn-benchmark/configs/baseline.yaml",
         metavar="FILE",
         help="path to maskrcnn_benchmark config file",
         type=str,
@@ -255,19 +277,19 @@ def main():
         "--imageroot",
         type=str,
         help="Directory to the images",
-        default="/data6/SRIP19_SelfDriving/bdd12k/data1/"
+        default="/home/selfdriving/mrcnn/bdd12k_images/"
     )
     parser.add_argument(
         "--gtroot",
         type=str,
         help="Directory to the groundtruth",
-        default="/data6/SRIP19_SelfDriving/bdd12k/annotations/12k_gt_val_5_actions.json"
+        default="/home/selfdriving/mrcnn/bdd12k_images_annotations/12k_gt_val_5_actions.json"
     )
     parser.add_argument(
         "--reasonroot",
         type=str,
         help="Directory to the reason gt",
-        default="/data6/SRIP19_SelfDriving/bdd12k/annotations/val_reason_img.json"
+        default="/home/selfdriving/mrcnn/bdd12k_images_annotations/val_reason_img.json"
     
     )
     parser.add_argument(
@@ -298,13 +320,13 @@ def main():
         "--model_root",
         type=str,
         help="Directory to the trained model",
-        default="/data6/SRIP19_SelfDriving/bdd12k/Outputs/08_23_w_sel_batch2/netFinal_13.pth"
+        default="/home/selfdriving/mrcnn/output/09_06_net_side/net_10.pth"
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         help="Directory to the trained model",
-        default="/data6/SRIP19_SelfDriving/bdd12k/Outputs/"
+        default="/home/selfdriving/mrcnn/output/"
 
     )
 

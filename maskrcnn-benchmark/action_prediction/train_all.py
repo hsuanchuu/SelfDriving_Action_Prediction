@@ -36,7 +36,7 @@ def train(cfg, args):
         # path = '/data6/SRIP19_SelfDriving/bdd100k/trained_model/Outputs/model_final_apt.pth'
         path = args.model_root
         checkpoint = torch.load(path)
-        model.load_state_dict(checkpoint, strict=False)
+        model.load_state_dict(checkpoint)
     else:
         checkpoint = torch.load(args.checkpoint)
         model.load_state_dict(checkpoint)
