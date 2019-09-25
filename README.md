@@ -51,5 +51,5 @@ python action_prediction/train_all.py --imageroot path/to/image/ --gtroot path/t
 Testing:  
 ```bash
 python action_prediction/test_all.py --imageroot path/to/image/ --gtroot path/to/groundtruth/actions/ --resonroot path/to/groundtruth/explanations --model_root path/to/pretrained/fasterrcnn/weights OUT_DIR output/directory MODEL.SIDE True
-```  
+```
 Optional paramters: --initLR, --weight_decay, --num_epoch, --batch_size  
